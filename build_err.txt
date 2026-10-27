@@ -1,0 +1,14 @@
+﻿MSBuild version 17.14.60+43b635718 for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/dani stuff/c++/BaconPlugins/plugins/vpLightBake/CMakeLists.txt
+  actions.cpp
+  main.cpp
+  map.cpp
+  preview.cpp
+  rad.cpp
+  wad.cpp
+  vstdlib_static.cpp
+  Generating Code...
+     Creating library D:/dani stuff/c++/BaconPlugins/build_lb/plugins/vpLightBake/RelWithDebInfo/vpLightBakex64.lib and object D:/dani stuff/c++/BaconPlugins/build_lb/plugins/vpLightBake/RelWithDebInfo/vpLightBakex64.exp
+  lightbake.vcxproj -> D:\dani stuff\c++\BaconPlugins\build_lb\plugins\vpLightBake\RelWithDebInfo\vpLightBakex64.dll
