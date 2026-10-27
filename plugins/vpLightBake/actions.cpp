@@ -163,6 +163,28 @@ static void LB_EnsureTextureCache( const char *extraDir )
 	Sys_Printf( "LightBake: %d textures indexed", g_textureCache.GetIndexedCount() );
 }
 
+// bacontsu: rad files sit next to the wads, info_texlights lives inside the map
+static void LB_EnsureTexLights( const char *extraDir, qWorld_s *world )
+{
+	LB_ClearTexLights();
+
+	char modDir[MAX_PATH] = { 0 };
+	char baseDir[MAX_PATH] = { 0 };
+
+	if ( Sys_GetModDirectory( modDir, sizeof( modDir ) ) )
+		LB_LoadRadDirectory( modDir );
+
+	if ( Sys_GetBaseDirectory( baseDir, sizeof( baseDir ) ) && ( !modDir[0] || stricmp( modDir, baseDir ) ) )
+		LB_LoadRadDirectory( baseDir );
+
+	if ( extraDir && extraDir[0] )
+		LB_LoadRadDirectory( extraDir );
+
+	LB_CollectInfoTexLights( world );
+
+	LB_LogMsg( "texlights: %d textures known", LB_GetTexLightCount() );
+}
+
 // bacontsu: writes the geometry/lighting numbers of the first few faces to the log, so texture
 static void LB_DumpDebugInfo( CMapGeometry &geometry )
 {
@@ -242,6 +264,7 @@ static void LB_DoCompile()
 	}
 
 	g_settings.m_bounceEnabled = Dialog_QueryArgumentInt( "bounceEnabled" ) != 0;
+	g_settings.m_texLights = Dialog_QueryArgumentInt( "texLights" ) != 0;
 	g_settings.m_bounce = Dialog_QueryArgumentInt( "bounce" );
 
 	g_settings.m_chop = Dialog_QueryArgumentInt( "chop" );
@@ -283,6 +306,10 @@ static void LB_DoCompile()
 	{
 		LB_EnsureTextureCache( g_wadPath );
 
+		// texture lights need the wads for the albedo, so this runs after the cache
+		if ( g_settings.m_texLights )
+			LB_EnsureTexLights( g_wadPath, world );
+
 		Dialog_SetProgress( 0, 1 );
 		Dialog_Printf( "Loading geometry..." );
 
@@ -300,6 +327,14 @@ static void LB_DoCompile()
 
 		LB_LogMsg( "faces=%d lit=%d occluderTris=%d lights=%d sky=%d", (int)geometry.m_faces.size(), geometry.m_numLitFaces,
 			geometry.m_numOccluders, (int)geometry.m_lights.size(), geometry.m_sky.m_enabled ? 1 : 0 );
+
+		if ( g_settings.m_texLights )
+		{
+			geometry.BuildEmitters( g_settings.m_texChop );
+
+			if ( geometry.m_numTexLightFaces > 0 )
+				Dialog_Printf( "%d texture light faces, %d emitters", geometry.m_numTexLightFaces, (int)geometry.m_emitters.size() );
+		}
 
 		geometry.BuildLightmaps( g_settings.m_chop );
 
@@ -382,6 +417,7 @@ static void LB_ActionCompile( int actionUserData )
 	Dialog_Begin( "Compile Light" );
 	{
 		Dialog_AddCheckBox( "bounceEnabled", "Bounce light", g_settings.m_bounceEnabled, 0 );
+		Dialog_AddCheckBox( "texLights", "Texture lights (rad / info_texlights)", g_settings.m_texLights, 0 );
 		Dialog_AddSpinBox( "bounce", "Bounces", g_settings.m_bounce, 0, 32, 1, 0 );
 
 		Dialog_AddSpinBox( "chop", "Lightmap resolution (chop)", g_settings.m_chop, 4, 64, 4, 0 );
@@ -487,13 +523,13 @@ static pluginActionDesc_t g_actionCompile =
 {
 #if JACK_API_VERSION >= API_VERSION_STEAM_BETA
 	"CompileLight",
-#endif // jACK_API_VERSION >= API_VERSION_STEAM_BETA
+#endif // JACK_API_VERSION >= API_VERSION_STEAM_BETA
 	"&Compile Light",
 	"Bakes lighting for the current map (hlrad style) and previews it",
 	"Half-Life",
 #if JACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
 	0,
-#endif // jACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
+#endif // JACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
 	0,
 	0,
 	LB_ActionCompile
@@ -503,13 +539,13 @@ static pluginActionDesc_t g_actionRestore =
 {
 #if JACK_API_VERSION >= API_VERSION_STEAM_BETA
 	"RestoreBakedLighting",
-#endif // jACK_API_VERSION >= API_VERSION_STEAM_BETA
+#endif // JACK_API_VERSION >= API_VERSION_STEAM_BETA
 	"&Restore baked lighting",
 	"Restores the face textures changed by the light baker",
 	"Half-Life",
 #if JACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
 	0,
-#endif // jACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
+#endif // JACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
 	0,
 	0,
 	LB_ActionRestore
@@ -520,13 +556,13 @@ static pluginActionDesc_t g_actionRepair =
 {
 #if JACK_API_VERSION >= API_VERSION_STEAM_BETA
 	"FixBakedTextureNames",
-#endif // jACK_API_VERSION >= API_VERSION_STEAM_BETA
+#endif // JACK_API_VERSION >= API_VERSION_STEAM_BETA
 	"&Fix baked texture names",
 	"Removes light baker texture names that were saved into the map",
 	"Half-Life",
 #if JACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
 	0,
-#endif // jACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
+#endif // JACK_API_VERSION <= API_VERSION_STEAM_PUBLIC
 	0,
 	0,
 	LB_ActionRepairNames

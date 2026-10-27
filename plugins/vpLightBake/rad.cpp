@@ -274,6 +274,64 @@ static vec3_t LB_ComputeDirect( const CMapGeometry &geometry, const lbSettings_t
 
 	sum += LB_ComputeSkyLight( geometry, settings, face, pos, seed );
 
+	// bacontsu: texture lights, each emitter is one patch of an emitting face
+	for ( size_t i = 0; i < geometry.m_emitters.size(); i++ )
+	{
+		const lbEmitter_t &emitter = geometry.m_emitters[i];
+
+		vec3_t delta = emitter.m_origin - pos;
+
+		float dist2 = DotProduct( delta, delta );
+
+		// far emitters can never reach the cut off below, skip the sqrt
+		if ( dist2 > emitter.m_reach )
+			continue;
+
+		float dist = sqrtf( dist2 );
+
+		if ( dist < 1.f )
+			dist = 1.f;
+
+		vec3_t dir = delta * ( 1.f / dist );
+
+		float dotReceiver = DotProduct( dir, face.m_normal );
+
+		if ( dotReceiver <= LB_NORMAL_EPSILON )
+			continue;
+
+		float dotEmitter = -DotProduct( dir, emitter.m_normal );
+
+		// receiver sits on the emitter plane, this also stops the face lighting itself
+		if ( dotEmitter * dist <= 0.04f )
+			continue;
+
+		if ( emitter.m_stopdot2 > 0.f && dotEmitter <= emitter.m_stopdot2 )
+			continue;
+
+		if ( emitter.m_range > 0.f && dist > emitter.m_range )
+			continue;
+
+		float ratio = dotReceiver * dotEmitter / ( dist * dist );
+
+		// hlrad caps the contribution per unit area to avoid hot spots at corners
+		if ( ratio * emitter.m_area > 0.4f )
+			ratio = 0.4f / emitter.m_area;
+
+		if ( emitter.m_stopdot > 0.f && dotEmitter <= emitter.m_stopdot )
+			ratio *= ( dotEmitter - emitter.m_stopdot2 ) / ( emitter.m_stopdot - emitter.m_stopdot2 );
+
+		vec3_t add = emitter.m_power * ( emitter.m_area * ratio );
+
+		// cheap reject before paying for a ray
+		if ( LB_MaxComponent( add ) < 0.05f )
+			continue;
+
+		if ( !LB_PointVisible( geometry, pos, face.m_normal, emitter.m_origin ) )
+			continue;
+
+		sum += add;
+	}
+
 	return sum;
 }
 
@@ -340,6 +398,19 @@ void CRad::ComputeDirect()
 		{
 			face.m_luxelDirect[i] = LB_ComputeDirect( m_geometry, m_settings, face, face.m_luxelPos[i],
 				(unsigned int)( faceIndex * 7919 + (int)i * 104729 + 1 ) );
+		}
+
+		// a texture light face glows with at least its own brightness
+		if ( face.m_texLight )
+		{
+			for ( size_t i = 0; i < face.m_luxelDirect.size(); i++ )
+			{
+				for ( int c = 0; c < 3; c++ )
+				{
+					if ( face.m_luxelDirect[i][c] < face.m_texLightColor[c] )
+						face.m_luxelDirect[i][c] = face.m_texLightColor[c];
+				}
+			}
 		}
 	} );
 }

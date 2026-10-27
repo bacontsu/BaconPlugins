@@ -18,6 +18,7 @@ BEGIN_SRC( LIGHTBAKE_SOURCE_FILES "Source Files" )
 			"map.cpp"
 			"preview.cpp"
 			"rad.cpp"
+			"texlight.cpp"
 			"wad.cpp"
 
 			"../common/vstdlib_static.cpp"
@@ -31,6 +32,7 @@ BEGIN_SRC( LIGHTBAKE_HEADER_FILES "Header Files" )
 		SOURCES
 		#{
 			"lightbake.h"
+			"texlight.cpp"
 			"wad.h"
 
 			"../common/vstdlib_static.h"

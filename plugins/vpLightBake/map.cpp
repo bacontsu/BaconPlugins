@@ -19,10 +19,32 @@ extern CTextureCache g_textureCache;
 
 static const char *LB_GetKeyValue( qEntity_s *entity, const char *key );
 
-// bacontsu: brush entities that should not cast shadows, see the checks below
-// - entities that are non solid in game (func_illusionary and friends, triggers)
-// - any entity with a transparent render mode (rendermode != 0, renderamt < 255)
-// - zhlt_lightflags 8 (VHLT "nonsolid")
+// bacontsu: rendermode may be a number or a name depending on who wrote the map
+static int LB_ParseRenderMode( const char *value )
+{
+	if ( !value || !value[0] )
+		return 0;
+
+	if ( isdigit( (unsigned char)value[0] ) || value[0] == '-' )
+		return atoi( value );
+
+	if ( !stricmp( value, "normal" ) )
+		return 0;
+	if ( !stricmp( value, "color" ) )
+		return 1;
+	if ( !stricmp( value, "texture" ) )
+		return 2;
+	if ( !stricmp( value, "glow" ) )
+		return 3;
+	if ( !stricmp( value, "solid" ) )
+		return 4;
+	if ( !stricmp( value, "additive" ) )
+		return 5;
+
+	return 0;
+}
+
+// bacontsu: brushes that should not cast shadows, worldspawn always does
 static bool LB_EntityDoesNotBlockLight( qEntity_s *entity )
 {
 	if ( !entity )
@@ -30,38 +52,61 @@ static bool LB_EntityDoesNotBlockLight( qEntity_s *entity )
 
 	const char *className = entity->m_className;
 
-	if ( className && className[0] )
+	if ( !className || !className[0] || !stricmp( className, "worldspawn" ) )
+		return false;
+
+	static const char *s_nonSolid[] =
 	{
-		static const char *s_nonSolid[] =
-		{
-			"func_illusionary", "func_water", "func_ladder", "func_monsterclip",
-			"func_buyzone", "func_vehicleclip", "func_grenadeclip", "func_friction",
-			NULL
-		};
+		"func_illusionary", "func_water", "func_ladder", "func_monsterclip",
+		"func_buyzone", "func_vehicleclip", "func_grenadeclip", "func_friction",
+		NULL
+	};
 
-		for ( int i = 0; s_nonSolid[i]; i++ )
-		{
-			if ( !stricmp( className, s_nonSolid[i] ) )
-				return true;
-		}
-
-		if ( !strnicmp( className, "trigger_", 8 ) )
+	for ( int i = 0; s_nonSolid[i]; i++ )
+	{
+		if ( !stricmp( className, s_nonSolid[i] ) )
 			return true;
 	}
+
+	if ( !strnicmp( className, "trigger_", 8 ) )
+		return true;
 
 	const char *lightFlags = LB_GetKeyValue( entity, "zhlt_lightflags" );
 
 	if ( lightFlags && ( atoi( lightFlags ) & 8 ) )
 		return true;
 
-	const char *renderMode = LB_GetKeyValue( entity, "rendermode" );
+	// the editor keeps the render mode in the entity, the keyvalue is only there when the
+	// map was made by something that writes it out
+	int renderMode = entity->m_renderMode.m_renderMode;
 
-	if ( renderMode && atoi( renderMode ) != 0 )
+	const char *renderModeKey = LB_GetKeyValue( entity, "rendermode" );
+
+	if ( renderModeKey )
+	{
+		int parsed = LB_ParseRenderMode( renderModeKey );
+
+		if ( parsed != 0 )
+			renderMode = parsed;
+	}
+
+	// glow and additive always let light through, the others only blend below full alpha
+	if ( renderMode == 3 || renderMode == 5 )
 		return true;
 
-	const char *renderAmt = LB_GetKeyValue( entity, "renderamt" );
+	int renderAmount = entity->m_renderMode.m_renderColor.a;
 
-	if ( renderAmt && atoi( renderAmt ) > 0 && atoi( renderAmt ) < 255 )
+	const char *renderAmtKey = LB_GetKeyValue( entity, "renderamt" );
+
+	if ( renderAmtKey )
+	{
+		int parsed = atoi( renderAmtKey );
+
+		if ( parsed > 0 )
+			renderAmount = parsed;
+	}
+
+	if ( renderAmount > 0 && renderAmount < 255 )
 		return true;
 
 	return false;
@@ -152,7 +197,6 @@ static bool LB_IsSkyTexture( const char *name )
 	return !strnicmp( name, "sky", 3 ) || !strnicmp( name, "t_sky", 5 );
 }
 
-// returns NULL when the key doesn't exist
 static const char *LB_GetKeyValue( qEntity_s *entity, const char *key )
 {
 	for ( epair_s *pair = entity->epairs; pair; pair = pair->next )
@@ -233,7 +277,6 @@ static float LB_DistToPlane( const vec3_t &normal, float dist, const vec3_t &poi
 	return DotProduct( normal, point ) - dist;
 }
 
-// interpolates a lightmap grid (bilinear)
 static vec3_t LB_SampleGrid( const std::vector<vec3_t> &grid, int w, int h, float fx, float fy )
 {
 	if ( w <= 0 || h <= 0 || grid.empty() )
@@ -431,7 +474,6 @@ int CBVH::BuildNode( int first, int count, int depth )
 		return nodeIndex;
 	}
 
-	// median split along the longest centroid axis
 	int axis = 0;
 	float bestExtent = 0.f;
 
@@ -562,7 +604,6 @@ float CBVH::Trace( const vec3_t &start, const vec3_t &dir, float maxDist, int *t
 	if ( maxDist <= 0.f )
 		maxDist = 1e30f;
 
-	// avoid divisions by zero in the slab test
 	vec3_t invDir;
 	for ( int i = 0; i < 3; i++ )
 	{
@@ -658,6 +699,7 @@ CMapGeometry::CMapGeometry()
 	m_numLuxels = 0;
 	m_numOccluders = 0;
 	m_numSkippedLights = 0;
+	m_numTexLightFaces = 0;
 }
 
 CMapGeometry::~CMapGeometry()
@@ -669,6 +711,8 @@ void CMapGeometry::Purge()
 {
 	m_faces.clear();
 	m_lights.clear();
+	m_emitters.clear();
+	m_surfaceLights.clear();
 	m_bvh.Purge();
 
 	m_sky.m_enabled = false;
@@ -812,7 +856,6 @@ void CMapGeometry::AddLight( qEntity_s *entity )
 			return;
 		}
 
-		// point at the target when one is set
 		const char *targetStr = LB_GetKeyValue( entity, "target" );
 
 		if ( targetStr && targetStr[0] )
@@ -902,12 +945,11 @@ void CMapGeometry::AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face )
 		if ( s_transparentLogged < 8 )
 		{
 			s_transparentLogged++;
-			LB_LogMsg( "geometry: face '%s' of '%s' skipped (non solid / transparent)", out.m_texName,
-				entity && entity->m_className ? entity->m_className : "?" );
+			LB_LogMsg( "geometry: face '%s' of '%s' skipped (non solid / transparent, rendermode=%d)", out.m_texName,
+				entity && entity->m_className ? entity->m_className : "?", entity ? entity->m_renderMode.m_renderMode : 0 );
 		}
 	}
 
-	// log the first few faces that are skipped, so "lit=6 out of 36" is explainable
 	{
 		static int s_skippedLogged = 0;
 
@@ -925,7 +967,6 @@ void CMapGeometry::AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face )
 		out.m_texWidth = texture->m_width;
 		out.m_texHeight = texture->m_height;
 
-		// average color, used by the bounce pass
 		double r = 0, g = 0, b = 0;
 		int count = texture->m_width * texture->m_height;
 
@@ -1010,7 +1051,6 @@ void CMapGeometry::AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face )
 		}
 	}
 
-	// fit uv = grad * (x,y) + offset
 	{
 		vec3_t origin = out.m_verts[0];
 
@@ -1053,16 +1093,12 @@ void CMapGeometry::AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face )
 		}
 		else
 		{
-			// degenerate mapping, fall back to 1 texel per world unit
 			out.m_uvGradU = lbVec2( 1.f, 0.f );
 			out.m_uvGradV = lbVec2( 0.f, 1.f );
 			out.m_uvOffset = lbVec2( -bbMin.x, -bbMin.y );
 		}
 
-		// the editor stores the per vertex uv in texture *repeats*
-		// ( u = dot( pos, axis ) / scale / textureSize ), while the texdef is in texels
-		// detect which convention we got, so the base texture is sampled at the right
-		// frequency instead of being magnified into stripes
+		// editor uv is in texture repeats, the texdef is in texels, detect which one we got
 		{
 			float texScaleX = ( face->m_texDef.m_scale.x != 0.f ) ? face->m_texDef.m_scale.x : 1.f;
 			float texScaleY = ( face->m_texDef.m_scale.y != 0.f ) ? face->m_texDef.m_scale.y : 1.f;
@@ -1125,6 +1161,31 @@ bool CMapGeometry::Build( qWorld_s *world )
 	for ( qEntity_s *entity = world->m_entityList; entity; entity = entity->next )
 	{
 		AddLight( entity );
+		AddSurfaceLight( entity );
+
+		// one line per brush entity so the render mode handling can be verified from the log
+		if ( entity->m_brushList )
+		{
+			static int s_entityLogged = 0;
+
+			if ( s_entityLogged < 200 )
+			{
+				s_entityLogged++;
+
+				const char *renderModeKey = LB_GetKeyValue( entity, "rendermode" );
+				const char *renderAmtKey = LB_GetKeyValue( entity, "renderamt" );
+
+				LB_LogMsg( "entity: '%s' renderMode=%d renderFlags=0x%x alpha=%d fx=%d keyMode='%s' keyAmt='%s' skip=%d",
+					entity->m_className ? entity->m_className : "?",
+					entity->m_renderMode.m_renderMode,
+					entity->m_renderMode.m_renderFlags,
+					(int)entity->m_renderMode.m_renderColor.a,
+					entity->m_renderMode.m_renderFx,
+					renderModeKey ? renderModeKey : "",
+					renderAmtKey ? renderAmtKey : "",
+					LB_EntityDoesNotBlockLight( entity ) ? 1 : 0 );
+			}
+		}
 
 		for ( qBrush_s *brush = entity->m_brushList; brush; brush = brush->next )
 		{
@@ -1271,6 +1332,235 @@ void CMapGeometry::BuildLightmaps( int chop )
 	}
 }
 
+// bacontsu: light_surface, the newest way of doing texture lights
+void CMapGeometry::AddSurfaceLight( qEntity_s *entity )
+{
+	if ( !entity->m_className || stricmp( entity->m_className, "light_surface" ) )
+		return;
+
+	lbSurfaceLight_t light;
+
+	memset( &light, 0, sizeof( light ) );
+
+	const char *value = LB_GetKeyValue( entity, "_tex" );
+
+	if ( value )
+		strncpy( light.m_texture, value, sizeof( light.m_texture ) - 1 );
+
+	value = LB_GetKeyValue( entity, "_fclass" );
+
+	if ( value )
+		strncpy( light.m_classFilter, value, sizeof( light.m_classFilter ) - 1 );
+
+	value = LB_GetKeyValue( entity, "_fname" );
+
+	if ( value )
+		strncpy( light.m_nameFilter, value, sizeof( light.m_nameFilter ) - 1 );
+
+	vec3_t color;
+	float brightness;
+
+	LB_ParseLightValue( LB_GetKeyValue( entity, "_light" ), color, brightness );
+
+	light.m_color = color * ( brightness / 255.f );
+
+	light.m_scale = 1.f;
+
+	value = LB_GetKeyValue( entity, "_scale" );
+
+	if ( value )
+		light.m_scale = (float)atof( value );
+
+	vec3_t texColor;
+	float texBrightness;
+
+	if ( LB_ParseLightValue( LB_GetKeyValue( entity, "_texcolor" ), texColor, texBrightness ) )
+	{
+		light.m_texColor = texColor * ( texBrightness / 255.f );
+		light.m_hasTexColor = true;
+	}
+
+	float cone = 0.f;
+	float cone2 = 0.f;
+
+	value = LB_GetKeyValue( entity, "_cone" );
+
+	if ( value )
+		cone = (float)atof( value );
+
+	value = LB_GetKeyValue( entity, "_cone2" );
+
+	if ( value )
+		cone2 = (float)atof( value );
+
+	if ( cone2 < cone )
+		std::swap( cone, cone2 );
+
+	// a cone of 90 degrees or more is just an omnidirectional emitter
+	if ( cone > 0.f && cone < 90.f )
+		light.m_stopdot = cosf( cone * (float)( M_PI / 180.0 ) );
+
+	if ( cone2 > 0.f && cone2 < 90.f )
+		light.m_stopdot2 = cosf( cone2 * (float)( M_PI / 180.0 ) );
+
+	value = LB_GetKeyValue( entity, "_frange" );
+
+	if ( value )
+		light.m_range = (float)atof( value );
+
+	m_surfaceLights.push_back( light );
+}
+
+// bacontsu: texture lights become area light patches, like hlrad
+void CMapGeometry::BuildEmitters( int texChop )
+{
+	m_emitters.clear();
+	m_numTexLightFaces = 0;
+
+	if ( texChop < 4 )
+		texChop = 32;
+
+	const float kInvPi = 1.f / (float)M_PI;
+	const int kMaxPatchesPerFace = 16;
+
+	for ( size_t f = 0; f < m_faces.size(); f++ )
+	{
+		lbFace_t &face = m_faces[f];
+
+		if ( !face.m_lit || face.m_liquid || face.m_verts.size() < 3 )
+			continue;
+
+		vec3_t color( 0.f, 0.f, 0.f );
+		float scale = 1.f;
+		float stopdot = 0.f;
+		float stopdot2 = 0.f;
+		float range = 0.f;
+		bool fromTexture = false;
+		bool found = false;
+
+		for ( size_t s = 0; s < m_surfaceLights.size() && !found; s++ )
+		{
+			const lbSurfaceLight_t &surface = m_surfaceLights[s];
+
+			if ( surface.m_texture[0] && stricmp( surface.m_texture, face.m_texName ) )
+				continue;
+
+			if ( surface.m_classFilter[0] && face.m_entity && face.m_entity->m_className
+				&& stricmp( surface.m_classFilter, face.m_entity->m_className ) )
+				continue;
+
+			if ( surface.m_nameFilter[0] && face.m_entity && face.m_entity->m_targetName
+				&& stricmp( surface.m_nameFilter, face.m_entity->m_targetName ) )
+				continue;
+
+			color = surface.m_color;
+			scale = surface.m_scale;
+			stopdot = surface.m_stopdot;
+			stopdot2 = surface.m_stopdot2;
+			range = surface.m_range;
+
+			if ( surface.m_hasTexColor )
+			{
+				color = surface.m_texColor;
+				fromTexture = false;
+			}
+
+			found = true;
+		}
+
+		if ( !found )
+			found = LB_FindTexLight( face.m_texName, color, fromTexture );
+
+		if ( !found || scale <= 0.f )
+			continue;
+
+		vec3_t baselight;
+
+		if ( fromTexture )
+		{
+			// info_texlights only gives a brightness, the color comes from the texture
+			baselight = face.m_albedo * color.x;
+		}
+		else
+		{
+			// explicit color, hlrad multiplies it by the surface reflectivity
+			baselight = color * face.m_albedo;
+		}
+
+		baselight = baselight * scale;
+
+		if ( baselight.x <= 0.f && baselight.y <= 0.f && baselight.z <= 0.f )
+			continue;
+
+		face.m_texLight = true;
+		face.m_texLightColor = baselight;
+		m_numTexLightFaces++;
+
+		float extentU = face.m_bbMax.x - face.m_bbMin.x;
+		float extentV = face.m_bbMax.y - face.m_bbMin.y;
+
+		if ( extentU < 1.f || extentV < 1.f )
+			continue;
+
+		int numU = (int)ceilf( extentU / (float)texChop );
+		int numV = (int)ceilf( extentV / (float)texChop );
+
+		numU = std::max( 1, std::min( numU, 8 ) );
+		numV = std::max( 1, std::min( numV, 8 ) );
+
+		while ( numU * numV > kMaxPatchesPerFace )
+		{
+			if ( numU >= numV )
+				numU = std::max( 1, numU / 2 );
+			else
+				numV = std::max( 1, numV / 2 );
+		}
+
+		float patchU = extentU / (float)numU;
+		float patchV = extentV / (float)numV;
+		float patchArea = patchU * patchV;
+
+		vec3_t origin = face.m_verts[0];
+
+		for ( int j = 0; j < numV; j++ )
+		{
+			for ( int i = 0; i < numU; i++ )
+			{
+				float cu = face.m_bbMin.x + ( i + 0.5f ) * patchU;
+				float cv = face.m_bbMin.y + ( j + 0.5f ) * patchV;
+
+				vec3_t pos = origin + face.m_e1 * ( cu - DotProduct( origin, face.m_e1 ) ) + face.m_e2 * ( cv - DotProduct( origin, face.m_e2 ) );
+
+				float dist = DotProduct( face.m_normal, pos ) - face.m_planeDist;
+				pos -= face.m_normal * dist;
+
+				lbEmitter_t emitter;
+				memset( &emitter, 0, sizeof( emitter ) );
+
+				emitter.m_origin = pos + face.m_normal * 1.f;
+				emitter.m_normal = face.m_normal;
+				emitter.m_power = baselight * kInvPi;
+				emitter.m_area = patchArea;
+				emitter.m_stopdot = stopdot;
+				emitter.m_stopdot2 = stopdot2;
+				emitter.m_range = range;
+
+				// past this distance the contribution drops below the cut off in rad.cpp
+				vec3_t maxAdd = baselight * ( patchArea * kInvPi ) * ( 1.f / 0.05f );
+				float strongest = std::max( maxAdd.x, std::max( maxAdd.y, maxAdd.z ) );
+				float reach = ( strongest > 0.f ) ? sqrtf( strongest ) : 0.f;
+
+				emitter.m_reach = std::min( reach * reach, 8192.f * 8192.f );
+
+				m_emitters.push_back( emitter );
+			}
+		}
+	}
+
+	if ( m_numTexLightFaces > 0 )
+		LB_LogMsg( "texlights: %d emitting faces, %d emitters", m_numTexLightFaces, (int)m_emitters.size() );
+}
+
 void LB_DefaultSettings( lbSettings_t &settingsOut )
 {
 	memset( &settingsOut, 0, sizeof( settingsOut ) );
@@ -1286,6 +1576,8 @@ void LB_DefaultSettings( lbSettings_t &settingsOut )
 	settingsOut.m_minLight = 0.f;
 	settingsOut.m_bounceOnlySky = true;
 	settingsOut.m_numThreads = 0;
+	settingsOut.m_texLights = true;
+	settingsOut.m_texChop = 32;
 	settingsOut.m_preview = true;
 	settingsOut.m_restoreOnClick = true;
 	settingsOut.m_overrideUVs = true;
