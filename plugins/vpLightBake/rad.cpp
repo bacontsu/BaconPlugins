@@ -525,6 +525,25 @@ void CRad::ComputeBounce()
 
 					const lbFace_t &hitFace = m_geometry.m_faces[hitFaceIndex];
 
+					// the sky is a luminous surface, hlrad gives sky patches the sky colour as
+					// emission and that is how daylight reaches an outdoor map
+					if ( hitFace.m_sky )
+					{
+						if ( m_geometry.m_sky.m_enabled )
+						{
+							float dot = DotProduct( dir, -m_geometry.m_sky.m_direction );
+
+							if ( dot < 0.f )
+								dot = 0.f;
+
+							vec3_t skyLight = m_geometry.m_sky.m_color * ( 0.5f + dot ) + m_geometry.m_sky.m_diffuse * 0.125f;
+
+							accum += skyLight * reflect * m_settings.m_skyScale;
+						}
+
+						continue;
+					}
+
 					if ( hitFaceIndex >= (int)previous.size() || previous[hitFaceIndex].empty() )
 						continue;
 

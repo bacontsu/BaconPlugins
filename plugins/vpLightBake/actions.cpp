@@ -342,7 +342,18 @@ static void LB_DoCompile()
 			geometry.m_numOccluders, (int)geometry.m_lights.size() );
 
 		if ( geometry.m_sky.m_enabled )
-			Dialog_Printf( "Sky lighting enabled" );
+		{
+			Dialog_Printf( "Sky lighting enabled, %d sky faces", geometry.m_numSkyFaces );
+
+			LB_LogMsg( "sky: %d sky faces, sun=(%.0f %.0f %.0f) diffuse=(%.0f %.0f %.0f) dir=(%.2f %.2f %.2f)", geometry.m_numSkyFaces,
+				geometry.m_sky.m_color.x, geometry.m_sky.m_color.y, geometry.m_sky.m_color.z, geometry.m_sky.m_diffuse.x,
+				geometry.m_sky.m_diffuse.y, geometry.m_sky.m_diffuse.z, geometry.m_sky.m_direction.x, geometry.m_sky.m_direction.y,
+				geometry.m_sky.m_direction.z );
+		}
+		else
+		{
+			LB_LogMsg( "sky: %d sky faces, no light_environment in the map", geometry.m_numSkyFaces );
+		}
 
 		Dialog_Printf( "%d lightmap samples, chop %d", geometry.m_numLuxels, (int)geometry.m_faces.empty() ? g_settings.m_chop : (int)geometry.m_faces[0].m_chop );
 

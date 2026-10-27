@@ -223,6 +223,7 @@ public:
 	int m_numOccluders;
 	int m_numSkippedLights;
 	int m_numTexLightFaces;
+	int m_numSkyFaces;
 
 private:
 	void AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face );

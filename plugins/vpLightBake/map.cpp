@@ -700,6 +700,7 @@ CMapGeometry::CMapGeometry()
 	m_numOccluders = 0;
 	m_numSkippedLights = 0;
 	m_numTexLightFaces = 0;
+	m_numSkyFaces = 0;
 }
 
 CMapGeometry::~CMapGeometry()
@@ -723,6 +724,8 @@ void CMapGeometry::Purge()
 	m_numLuxels = 0;
 	m_numOccluders = 0;
 	m_numSkippedLights = 0;
+	m_numTexLightFaces = 0;
+	m_numSkyFaces = 0;
 }
 
 void CMapGeometry::AddLight( qEntity_s *entity )
@@ -913,11 +916,12 @@ void CMapGeometry::AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face )
 
 	strncpy( out.m_texName, face->m_texDef.m_textureName, sizeof( out.m_texName ) - 1 );
 
-	// a map saved while a preview was active can carry our generated texture names
+	// a map saved while a preview was active can carry our generated texture names, recover
+	// them even when the wad has no such texture (sky textures have no mip data in a wad)
 	{
 		char recovered[MAX_PATH] = { 0 };
 
-		if ( LB_ParseBakedName( out.m_texName, recovered, sizeof( recovered ) ) && g_textureCache.Find( recovered ) )
+		if ( LB_ParseBakedName( out.m_texName, recovered, sizeof( recovered ) ) )
 		{
 			LB_LogMsg( "geometry: face '%s' carried a baked name, using '%s'", out.m_texName, recovered );
 
@@ -926,10 +930,14 @@ void CMapGeometry::AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face )
 		}
 	}
 
-	out.m_sky = LB_IsSkyTexture( out.m_texName );
-	out.m_liquid = LB_IsLiquidTexture( out.m_texName );
+	// the editor already knows what a texture is, trust its shader flags over the name
+	int materialType = face->m_shaderInfo ? face->m_shaderInfo->m_materialType : 0;
 
-	bool utility = LB_IsUtilityTexture( out.m_texName );
+	out.m_sky = LB_IsSkyTexture( out.m_texName ) || ( materialType & MAT_SKY ) != 0;
+	out.m_liquid = LB_IsLiquidTexture( out.m_texName ) || ( materialType & MAT_LIQUID ) != 0;
+
+	bool utility = LB_IsUtilityTexture( out.m_texName )
+		|| ( materialType & ( MAT_NULL | MAT_CLIP | MAT_HINT | MAT_TRIGGER | MAT_UTILITY ) ) != 0;
 
 	bool transparentEntity = LB_EntityDoesNotBlockLight( entity );
 
@@ -937,6 +945,9 @@ void CMapGeometry::AddFace( qEntity_s *entity, qBrush_s *brush, qFace_s *face )
 
 	// sky and utility surfaces get no lightmap, hlrad does the same
 	out.m_lit = !utility && !out.m_sky && !transparentEntity;
+
+	if ( out.m_sky )
+		m_numSkyFaces++;
 
 	if ( transparentEntity )
 	{
